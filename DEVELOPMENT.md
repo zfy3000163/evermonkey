@@ -44,6 +44,34 @@ The artifact is always `evermonkey.vsix` in the repo root (git-ignored), about
 15.6 MB. **Reload VS Code** (`Developer: Reload Window`) after installing, or the
 old build stays loaded.
 
+### Installing the VSIX
+
+```
+code --install-extension evermonkey.vsix --force
+```
+
+`--force` overwrites the installed copy. Without it, reinstalling the same
+version is a silent no-op, which reads as "the fix didn't take". The `code` CLI
+must be on `PATH` (`Shell Command: Install 'code' command in PATH` in the
+command palette); Cursor ships the same CLI as `cursor`.
+
+From the UI instead: Extensions view → `...` → **Install from VSIX…** → pick
+`evermonkey.vsix`.
+
+**Double-clicking the file does not install it here.** Windows installs a
+`.vsix` on double-click only when something has registered the `.vsix`
+association; nothing has on this machine (`reg query HKCR\.vsix` finds no such
+key), so the shell falls through to *"How do you want to open this file?"*.
+Two further ways this misleads:
+
+- The name has to end in `.vsix`. A renamed copy (`evermonkey-2.5.0.vsix.pg`,
+  say, to keep the binary out of git) matches no association and does nothing.
+- With both VS Code and Cursor installed the association can only belong to one
+  of them, and that is where the install lands.
+
+To make double-click work anyway: right-click the file → *Open with* → *Choose
+another app* → Code → tick *Always*.
+
 ### After installing
 
 1. **Reload VS Code.** Otherwise the previously loaded build stays in memory.
