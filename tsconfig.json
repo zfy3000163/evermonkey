@@ -1,16 +1,30 @@
 {
     "compilerOptions": {
         "module": "commonjs",
-        "target": "es6",
-        "outDir": "out",
+        "target": "ES2022",
         "lib": [
-            "es6"
+            "ES2022"
         ],
+        "outDir": "out",
+        "rootDir": ".",
         "sourceMap": true,
-        "rootDir": "."
+        "esModuleInterop": false,
+        "useDefineForClassFields": false,
+        "forceConsistentCasingInFileNames": true,
+        "skipLibCheck": true,
+        "noEmitOnError": true,
+        // `strict` is intentionally off: the evernote SDK ships no type
+        // declarations, so `strict`/`noImplicitAny` would turn every use of it
+        // into TS7016. Enabling it is a separate refactor.
+        "strict": false
     },
+    "include": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+    ],
     "exclude": [
         "node_modules",
+        "out",
         ".vscode-test"
     ]
 }

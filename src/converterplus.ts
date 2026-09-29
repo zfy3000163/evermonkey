@@ -8,15 +8,19 @@ import * as mdEmoji from "markdown-it-emoji";
 import * as mdEnmlTodo from "markdown-it-enml-todo";
 import markdownItGithubToc from "markdown-it-github-toc";
 import * as path from "path";
-import fs from "./file";
+import * as fs from "fs";
 import * as toMarkdown from "to-markdown";
-import * as vscode from "vscode";
 import * as util from "util";
 
-// Make this configurable
+/**
+ * This module imports nothing from `vscode`, so the whole markdown -> ENML
+ * pipeline is unit testable in plain node.
+ */
+
 const MARKDOWN_THEME_PATH = path.join(__dirname, "../../themes");
 const HIGHLIGHT_THEME_PATH = path.join(__dirname, "../../node_modules/highlight.js/styles");
 const DEFAULT_HIGHLIGHT_THEME = "github";
+const DEFAULT_MARKDOWN_THEME = "github.css";
 const MAGIC_SPELL = "%EVERMONKEY%";
 
 const OVERRIDE_FONT_FAMILY = `
@@ -39,13 +43,52 @@ const OVERRIDE_CODE_FONT_SIZE = `
   font-size: %s !important;
 }`;
 
+export interface ConverterOptions {
+  highlightTheme?: string;
+  markdownTheme?: string;
+  fontFamily?: string[];
+  fontSize?: string;
+  codeFontFamily?: string[];
+  codeFontSize?: string;
+}
 
-const config = vscode.workspace.getConfiguration("evermonkey");
+/**
+ * ENML elements the DTD declares EMPTY.
+ *
+ * Cheerio does not know them, so a self-closing `<en-media .../>` written in
+ * markdown is parsed as an *opening* tag that swallows everything up to the
+ * next closing tag, and the service rejects the note with
+ * `ENML_VALIDATION: The content of element type "en-media" must match "EMPTY"`.
+ * The paired form round-trips correctly, so self-closing ones are rewritten
+ * before rendering. This only touches the rendering copy -- the round-trip
+ * payload stays the user's original markdown.
+ */
+const ENML_EMPTY_ELEMENTS = ["en-media", "en-todo"];
+
+export function closeEmptyEnmlElements(markdown: string): string {
+  let result = markdown;
+  for (const tag of ENML_EMPTY_ELEMENTS) {
+    result = result.replace(
+      new RegExp(`<(${tag})((?:\\s[^>]*?)?)\\s*/>`, "gi"),
+      "<$1$2></$1>"
+    );
+  }
+  return result;
+}
 
 export default class Converter {
-  md;
-  styles;
-  constructor(options = {}) {
+  private md;
+  private options: ConverterOptions;
+  /**
+   * Style sheets are read asynchronously. Holding the promise (rather than
+   * assigning `this.styles` from a detached `.then`) matters once converters
+   * can be created on the fly -- a publish running before the read resolves
+   * would otherwise render with no CSS at all.
+   */
+  private stylesReady: Promise<string[]>;
+
+  constructor(options: ConverterOptions = {}) {
+    this.options = options;
     const md = new MarkdownIt({
       html: true,
       linkify: true,
@@ -57,8 +100,7 @@ export default class Converter {
           } catch (err) {}
         }
         return `<pre class="hljs"><code>${md.utils.escapeHtml(code)}</code></pre>`;
-      },
-      ...options,
+      }
     });
 
     // markdown-it plugin
@@ -77,31 +119,36 @@ export default class Converter {
       return result.replace("<code>", '<code class="inline">');
     };
     this.md = md;
-    this.initStyles().then(data => this.styles = data).catch(e => console.log(e));
+    this.stylesReady = this.loadStyles();
   }
 
-  initStyles() {
-    let highlightTheme = config.highlightTheme || DEFAULT_HIGHLIGHT_THEME;
-    // TODO: customize Mevernote rendering by input markdown theme.
-    const markdownTheme = config.markdownTheme || "github.css";
-    let formatTheme = highlightTheme.replace(/\s+/g, "-");
+  /**
+   * A missing or misspelled theme degrades to unstyled output rather than
+   * failing the publish: the note is still correct, just plain.
+   */
+  private loadStyles(): Promise<string[]> {
+    const highlightTheme = (this.options.highlightTheme || DEFAULT_HIGHLIGHT_THEME).replace(/\s+/g, "-");
+    const markdownTheme = this.options.markdownTheme || DEFAULT_MARKDOWN_THEME;
+    const read = (file: string) =>
+      fs.promises.readFile(file, "utf8").catch(err => {
+        console.warn(`evermonkey: cannot read theme "${file}": ${err.message}`);
+        return "";
+      });
     return Promise.all([
-      // TODO: read to the memory, instead of IO each time.
-      fs.readFileAsync(path.join(MARKDOWN_THEME_PATH, markdownTheme)),
-      // TODO: read config css here and cover the default one.
-      fs.readFileAsync(path.join(HIGHLIGHT_THEME_PATH, `${formatTheme}.css`))
-    ])
+      read(path.join(MARKDOWN_THEME_PATH, markdownTheme)),
+      read(path.join(HIGHLIGHT_THEME_PATH, `${highlightTheme}.css`))
+    ]);
   }
 
-  async toHtml(markcontent) {
-    const tokens = this.md.parse(markcontent, {});
+  async toHtml(markcontent: string): Promise<string> {
+    const tokens = this.md.parse(closeEmptyEnmlElements(markcontent), {});
     const html = this.md.renderer.render(tokens, this.md.options);
     const $ = cheerio.load(html);
     await this.processStyle($);
     return $.xml();
   }
 
-  async toEnml(markcontent) {
+  async toEnml(markcontent: string): Promise<string> {
     const html = await this.toHtml(markcontent);
     let enml = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>';
     enml += "<!--" + MAGIC_SPELL;
@@ -112,70 +159,78 @@ export default class Converter {
     return enml;
   }
 
-  async processStyle($) {
-    const styleHtml = this.customizeCss($);
+  async processStyle($): Promise<void> {
+    const styles = await this.stylesReady;
+    const styleHtml = this.customizeCss($, styles);
     $.root().html(styleHtml);
 
     // Change html classes to inline styles
     const inlineStyleHtml = await inlineCss($.html(), {
       url: "/",
       removeStyleTags: true,
-      removeHtmlSelectors: true,
+      removeHtmlSelectors: true
     });
     $.root().html(inlineStyleHtml);
-    $("en-todo").removeAttr("style");
+    // These carry ENML-defined attributes only; the inliner's `style` is not in
+    // the DTD and the service rejects attributes it does not know.
+    $("en-todo, en-media, en-crypt").removeAttr("style");
   }
 
-  customizeCss($) {
-    const config = vscode.workspace.getConfiguration("evermonkey");
-    let fontFamily;
-    let fontSize;
-    let codeFontFamily;
-    let codeFontSize;
-    if (config.fontFamily) {
-      fontFamily = util.format(OVERRIDE_FONT_FAMILY, config.fontFamily.join(","));
+  customizeCss($, styles: string[]): string {
+    const { fontFamily, fontSize, codeFontFamily, codeFontSize } = this.options;
+    let fontFamilyCss;
+    let fontSizeCss;
+    let codeFontFamilyCss;
+    let codeFontSizeCss;
+    if (fontFamily) {
+      fontFamilyCss = util.format(OVERRIDE_FONT_FAMILY, fontFamily.join(","));
     }
-    if (config.fontSize) {
-      fontSize = util.format(OVERRIDE_FONT_SIZE, config.fontSize);
+    if (fontSize) {
+      fontSizeCss = util.format(OVERRIDE_FONT_SIZE, fontSize);
     }
-    if (config.codeFontFamily) {
-      codeFontFamily = util.format(OVERRIDE_CODE_FONT_FAMILY, config.codeFontFamily.join(","));
+    if (codeFontFamily) {
+      codeFontFamilyCss = util.format(OVERRIDE_CODE_FONT_FAMILY, codeFontFamily.join(","));
     }
-    if (config.codeFontSize) {
-      codeFontSize = util.format(OVERRIDE_CODE_FONT_SIZE, config.codeFontSize);
+    if (codeFontSize) {
+      codeFontSizeCss = util.format(OVERRIDE_CODE_FONT_SIZE, codeFontSize);
     }
-    return `<style>${this.styles.join("")}${fontFamily}${fontSize}${codeFontFamily}${codeFontSize}</style>` +
-      `<div class="markdown-body">${$.html()}</div>`;
+    const overrides = [fontFamilyCss, fontSizeCss, codeFontFamilyCss, codeFontSizeCss]
+      .filter(Boolean)
+      .join("");
+    const css = `${styles.join("")}${overrides}`;
+    // inline-css throws on an empty <style> element, so the tag is omitted
+    // entirely when a theme file could not be read and there are no overrides.
+    const styleTag = css.trim().length > 0 ? `<style>${css}</style>` : "";
+    return `${styleTag}<div class="markdown-body">${$.html()}</div>`;
   }
 
-  toMd(enml) {
+  toMd(enml: string): string {
     if (!enml) {
       return "";
     }
-    let beginTagIndex = enml.indexOf("<en-note");
-    let startIndex = enml.indexOf(">", beginTagIndex) + 1;
-    let endIndex = enml.indexOf("</en-note>");
-    let rawContent = enml.substring(startIndex, endIndex);
+    const beginTagIndex = enml.indexOf("<en-note");
+    const startIndex = enml.indexOf(">", beginTagIndex) + 1;
+    const endIndex = enml.indexOf("</en-note>");
+    const rawContent = enml.substring(startIndex, endIndex);
     if (rawContent.indexOf(MAGIC_SPELL) !== -1) {
-      let beginMark = "<!--" + MAGIC_SPELL;
-      let beginMagicIdx = rawContent.indexOf(beginMark) + beginMark.length;
-      let endMagicIdx = rawContent.indexOf(MAGIC_SPELL + "-->");
-      let magicString = rawContent.substring(beginMagicIdx, endMagicIdx);
-      let base64content = new Buffer(magicString, "base64");
-      return base64content.toString("utf-8");
+      const beginMark = "<!--" + MAGIC_SPELL;
+      const beginMagicIdx = rawContent.indexOf(beginMark) + beginMark.length;
+      const endMagicIdx = rawContent.indexOf(MAGIC_SPELL + "-->");
+      const magicString = rawContent.substring(beginMagicIdx, endMagicIdx);
+      return Buffer.from(magicString, "base64").toString("utf-8");
     } else {
-      let commentRegex = /<!--.*?-->/;
-      let htmlStr = rawContent.replace(commentRegex, "");
-      let mdtxt = toMarkdown(htmlStr);
+      const commentRegex = /<!--.*?-->/;
+      const htmlStr = rawContent.replace(commentRegex, "");
+      const mdtxt = toMarkdown(htmlStr);
       return this.todoFix(mdtxt);
     }
   }
 
-  todoFix(markdown) {
-    return markdown.replace(/<en-todo\s+checked="true"\s*\/?>/g, '[x] ')
-      .replace(/<en-todo\s+checked="false"\s*\/?>/g, '[ ] ')
-      .replace(/<en-todo\s*\/?>/g, '[ ] ')
-      .replace(/<\/en-todo>/g, '');
+  todoFix(markdown: string): string {
+    return markdown.replace(/<en-todo\s+checked="true"\s*\/?>/g, "[x] ")
+      .replace(/<en-todo\s+checked="false"\s*\/?>/g, "[ ] ")
+      .replace(/<en-todo\s*\/?>/g, "[ ] ")
+      .replace(/<\/en-todo>/g, "");
   }
 
 }
