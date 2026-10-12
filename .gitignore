@@ -4,3 +4,4 @@ attachments
 .vscode-test
 .specstory/
 *.vsix
+.cursorindexingignore

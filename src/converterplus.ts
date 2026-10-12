@@ -165,10 +165,19 @@ export default class Converter {
     $.root().html(styleHtml);
 
     // Change html classes to inline styles
+    //
+    // `codeBlocks: {}` disables inline-css's built-in HBS/EJS placeholders. By
+    // default it treats `{{ ... }}` (and `<% ... %>`) as templating and skips
+    // inlining inside them, so hljs spans in such code blocks keep their
+    // `class` -- which ENML rejects with
+    // `ENML_VALIDATION: Attribute "class" must be declared for element type
+    // "span"`. Our markdown has no such templating, so disabling the
+    // placeholders is safe and injects styles into those blocks too.
     const inlineStyleHtml = await inlineCss($.html(), {
       url: "/",
       removeStyleTags: true,
-      removeHtmlSelectors: true
+      removeHtmlSelectors: true,
+      codeBlocks: {}
     });
     $.root().html(inlineStyleHtml);
     // These carry ENML-defined attributes only; the inliner's `style` is not in
