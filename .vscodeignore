@@ -8,3 +8,24 @@ src/**
 tsconfig.json
 vsc-extension-quickstart.md
 docs/**
+
+# --- 本地 fork 打包时排除的非运行时文件 ---
+# 之前漏掉的：会把 .specstory(会话记录)、assets 里除图标外的大图(演示 gif, ~11MB)、
+# 打包产物自身、以及无关文档/目录都塞进 vsix，导致体积虚高（且含会话隐私）。
+.specstory/**
+.claude/**
+.cursor/**
+.cursorindexingignore
+.github/**
+FORK.md
+DEVELOPMENT.md
+issue_template.md
+CNAME
+.bithoundrc
+# assets 只保留扩展图标，其余演示图(gif/jpg/png 截图)不打进包
+assets/**
+!assets/icon.png
+# 打包产物不要打进包里（避免自包含）
+*.vsix
+*.vsix.pg
+
