@@ -76,6 +76,134 @@ export function closeEmptyEnmlElements(markdown: string): string {
   return result;
 }
 
+/**
+ * Render TeX math to images.
+ *
+ * ENML cannot display LaTeX: there is no KaTeX/MathJax and `<style>` is
+ * stripped, and base markdown-it has no math support at all. We rewrite
+ * `$...$` / `\(...\)` / `$$...$$` / `\[...\]` into `<img>` tags that point at a
+ * remote TeX renderer (CodeCogs), so formulas show as real typeset images in
+ * Evernote. `<img src>` is declared in the ENML DTD, so the note still passes
+ * validation. Trade-off: the note needs network access to the renderer when it
+ * is displayed.
+ */
+const MATH_IMG_BASE = "https://latex.codecogs.com/png.image?";
+
+function mathImageUrl(tex: string): string {
+  return MATH_IMG_BASE + encodeURIComponent("\\dpi{200} " + tex.trim());
+}
+
+function mathImage(tex: string): string {
+  return `<img src="${mathImageUrl(tex)}" alt="formula" />`;
+}
+
+function markdownItMath(md): void {
+  const BS = "\\";
+
+  // Inline `\( ... \)` -- registered before `escape` so the opener is not
+  // consumed as an escaped parenthesis.
+  md.inline.ruler.before("escape", "math_paren", (state, silent) => {
+    const src = state.src;
+    const start = state.pos;
+    const open = BS + "(";
+    const close = BS + ")";
+    if (!src.startsWith(open, start)) {
+      return false;
+    }
+    const stop = src.indexOf(close, start + open.length);
+    if (stop < 0 || stop >= state.posMax) {
+      return false;
+    }
+    const content = src.slice(start + open.length, stop);
+    if (!content.trim()) {
+      return false;
+    }
+    if (!silent) {
+      state.push("math_inline", "math", 0).content = content;
+    }
+    state.pos = stop + close.length;
+    return true;
+  });
+
+  // Inline `$ ... $` -- after `backticks` so inline code keeps literal dollars.
+  md.inline.ruler.after("backticks", "math_dollar", (state, silent) => {
+    const src = state.src;
+    const start = state.pos;
+    if (src[start] !== "$" || src[start + 1] === "$") {
+      return false;
+    }
+    const stop = src.indexOf("$", start + 1);
+    if (stop < 0 || stop >= state.posMax) {
+      return false;
+    }
+    const content = src.slice(start + 1, stop);
+    if (!content.trim()) {
+      return false;
+    }
+    if (!silent) {
+      state.push("math_inline", "math", 0).content = content;
+    }
+    state.pos = stop + 1;
+    return true;
+  });
+
+  md.renderer.rules.math_inline = (tokens, idx) => mathImage(tokens[idx].content);
+
+  // Block `\[ ... \]` or `$$ ... $$`.
+  md.block.ruler.before("fence", "math_block", (state, startLine, endLine, silent) => {
+    const begin = state.bMarks[startLine] + state.tShift[startLine];
+    const end = state.eMarks[startLine];
+    const first = state.src.slice(begin, end);
+    let open, close;
+    if (first.startsWith(BS + "[")) {
+      open = BS + "[";
+      close = BS + "]";
+    } else if (first.startsWith("$$")) {
+      open = "$$";
+      close = "$$";
+    } else {
+      return false;
+    }
+    let content = "";
+    let lastLine = startLine;
+    let found = false;
+    const rest = first.slice(open.length);
+    const inlineEnd = rest.indexOf(close);
+    if (inlineEnd >= 0) {
+      content = rest.slice(0, inlineEnd);
+      found = true;
+    } else {
+      content = rest + "\n";
+      for (lastLine = startLine + 1; lastLine < endLine; lastLine++) {
+        const lineBegin = state.bMarks[lastLine] + state.tShift[lastLine];
+        const lineEnd = state.eMarks[lastLine];
+        const line = state.src.slice(lineBegin, lineEnd);
+        const stop = line.indexOf(close);
+        if (stop >= 0) {
+          content += line.slice(0, stop);
+          found = true;
+          break;
+        }
+        content += line + "\n";
+      }
+    }
+    if (!found) {
+      return false;
+    }
+    if (silent) {
+      return true;
+    }
+    const token = state.push("math_block", "math", 0);
+    token.block = true;
+    token.map = [startLine, lastLine + 1];
+    token.content = content;
+    state.line = lastLine + 1;
+    return true;
+  });
+
+  md.renderer.rules.math_block = (tokens, idx) => `<p>${mathImage(tokens[idx].content)}</p>\n`;
+}
+
 export default class Converter {
   private md;
   private options: ConverterOptions;
@@ -108,6 +236,7 @@ export default class Converter {
       .use(mdSup)
       .use(mdEnmlTodo)
       .use(mdEmoji)
+      .use(markdownItMath)
       .use(markdownItGithubToc, {
         anchorLink: false
       });
