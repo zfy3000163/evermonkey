@@ -2,7 +2,7 @@
     "name": "evermonkey",
     "displayName": "evermonkey",
     "description": "Markdown support for Evernote / 印象笔记.",
-    "version": "2.5.0",
+    "version": "2.5.1",
     "publisher": "michalyao",
     "license": "MIT",
     "engines": {

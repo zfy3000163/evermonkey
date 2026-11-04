@@ -203,10 +203,14 @@ async function attachToNote(): Promise<void> {
     const mime = guessMime(fileName);
     const data = await readFile(filepath);
     const md5 = hash(data);
+    // EDAM ResourceAttributes.attachment: true renders the resource as an
+    // attachment card, false renders it inline. Images should show inline, so
+    // only non-image files keep the attachment flag.
+    const isImage = /^image\//i.test(mime);
     attachments.add(doc, filepath, {
       mime,
       data: { body: data, size: data.length, bodyHash: md5 },
-      attributes: { fileName, attachment: true, timestamp: Date.now() }
+      attributes: { fileName, attachment: !isImage, timestamp: Date.now() }
     });
 
     // The media tag references the resource by its body hash. The upload itself

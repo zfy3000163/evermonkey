@@ -1,5 +1,16 @@
 # Change Log
 
+## [2.5.1]
+- `Ever attach` now uploads images as inline resources instead of attachments.
+  EDAM's `ResourceAttributes.attachment` decides how a resource is rendered:
+  `true` shows it as an attachment card (a file icon that has to be downloaded),
+  `false` renders it inline where the `<en-media>` tag sits. The flag was
+  hard-coded to `true`, so attached PNG/SVG images appeared as icons in the
+  published note and could not be previewed. It is now derived from the MIME
+  type — `image/*` uploads with `attachment: false`, everything else keeps the
+  attachment card. Already-published images keep the old flag until they are
+  re-attached and re-published.
+
 ## [2.5.0]
 - Fixed `SHARD_UNAVAILABLE` after switching to a different Evernote account. A
   `noteStoreUrl` left in settings by a previous account pointed at the old
