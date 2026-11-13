@@ -189,6 +189,17 @@
                     "default": "",
                     "description": "Local folder to upload attachment, as relative path."
                 },
+                "evermonkey.mermaid.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically render Mermaid fenced code blocks to inline PNG attachments when running Ever publish. The original Markdown source is preserved."
+                },
+                "evermonkey.mermaid.browserPath": {
+                    "type": "string",
+                    "default": "",
+                    "scope": "machine",
+                    "description": "Path to Edge or Chrome for offline Mermaid PNG rendering. Empty automatically detects an installed browser."
+                },
                 "evermonkey.showTips": {
                     "type": "boolean",
                     "default": true,

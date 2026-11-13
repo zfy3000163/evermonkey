@@ -1,0 +1,28 @@
+flowchart TD
+    A["dispatch：x、topk、容量、配置"] --> H{"传入 cached handle?"}
+    H -- 是 --> CH["复用 prefix / dst slots / hybrid metadata；CPU sync关闭"]
+    H -- 否 --> NM["校验路由；创建 prefix、dst slot 输出"]
+    NM --> DE{"deterministic?"}
+    DE -- 是 --> PR["原版 direct：deterministic prologue"]
+    DE -- 否 --> MA["kernel 内原子分配槽位"]
+    CH --> K["dispatch 主 kernel"]
+    PR --> K
+    MA --> K
+    subgraph Inside["主 kernel 内不同 warp 角色并行"]
+      NT["notify：rank 去重计数、expert计数、交换与prefix"]
+      MV["dispatch：hidden/SF TMA、metadata、slot、发送"]
+      NT --> BAR["设备 barrier：确认计数与数据可见"]
+      MV --> BAR
+    end
+    K --> NT
+    K --> MV
+    BAR --> CPU{"正常调用需要 CPU 精确计数?"}
+    CPU -- 是 --> EXACT["读取 rank/expert counts；精确分配输出"]
+    CPU -- 否 --> CAP["cached 用已有尺寸；否则按最坏上界分配"]
+    EXACT --> CP["dispatch copy epilogue"]
+    CAP --> CP
+    CP --> MODE{"do_expand?"}
+    MODE -- 否 --> ROW["每目标 rank一份token；本地expert idx，其他=-1"]
+    MODE -- 是 --> EXP["按本地专家展开；分配专家段与padding"]
+    ROW --> RET["返回 tensors、EPHandle、EventOverlap"]
+    EXP --> RET

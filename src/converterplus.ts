@@ -52,6 +52,11 @@ export interface ConverterOptions {
   codeFontSize?: string;
 }
 
+export interface RenderOptions {
+  /** Return ENML for a real Mermaid fence; the saved Markdown stays intact. */
+  renderMermaid?: (source: string, line: number) => Promise<string>;
+}
+
 /**
  * ENML elements the DTD declares EMPTY.
  *
@@ -269,16 +274,25 @@ export default class Converter {
     ]);
   }
 
-  async toHtml(markcontent: string): Promise<string> {
+  async toHtml(markcontent: string, options: RenderOptions = {}): Promise<string> {
     const tokens = this.md.parse(closeEmptyEnmlElements(markcontent), {});
+    if (options.renderMermaid) {
+      for (const token of tokens) {
+        if (token.type === "fence" && token.info.trim().split(/\s+/)[0].toLowerCase() === "mermaid") {
+          const media = await options.renderMermaid(token.content, token.map[0] + 1);
+          token.type = "html_block";
+          token.content = `<div>${media}</div>\n`;
+        }
+      }
+    }
     const html = this.md.renderer.render(tokens, this.md.options);
     const $ = cheerio.load(html);
     await this.processStyle($);
     return $.xml();
   }
 
-  async toEnml(markcontent: string): Promise<string> {
-    const html = await this.toHtml(markcontent);
+  async toEnml(markcontent: string, options: RenderOptions = {}): Promise<string> {
+    const html = await this.toHtml(markcontent, options);
     let enml = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd"><en-note>';
     enml += "<!--" + MAGIC_SPELL;
     enml += Buffer.from(markcontent, "utf-8").toString("base64");

@@ -5,6 +5,9 @@ import * as attachments from "./attachments";
 import { EvernoteClient, EvernoteNote } from "./everapi";
 import { NoteMetadata, parseFrontMatter, resolveTitle, serializeFrontMatter } from "./metadata";
 import { reportError } from "./report";
+import { MermaidRenderer } from "./mermaidRenderer";
+import { prepareMermaidNote } from "./mermaidPublication";
+import { mergeNoteResources, resourcesForUpdate } from "./noteResources";
 
 /**
  * One-way sync: the local Markdown file is the source of truth.
@@ -119,8 +122,6 @@ export async function publishCurrentFile(context: vscode.ExtensionContext): Prom
     }
     meta.title = title;
 
-    const content = await getConverter().toEnml(parsed.body);
-
     const notebookGuid = await resolveNotebookGuid(context, meta);
     if (!notebookGuid) {
       vscode.window.showInformationMessage("Publish cancelled: no notebook selected.");
@@ -173,14 +174,28 @@ export async function publishCurrentFile(context: vscode.ExtensionContext): Prom
       }
     }
 
+    const config = vscode.workspace.getConfiguration("evermonkey", doc.uri);
+    const prepared = config.get<boolean>("mermaid.enabled", true)
+      ? await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: "Ever publish" }, async progress => {
+          const renderer = new MermaidRenderer({
+            cacheDirectory: path.join(context.globalStorageUri.fsPath, "mermaid-png"),
+            browserPath: config.get<string>("mermaid.browserPath", "")
+          });
+          return prepareMermaidNote(getConverter(), parsed.body, source => renderer.render(source),
+            line => progress.report({ message: `Rendering Mermaid PNG (body line ${line})…` }));
+        })
+      : { content: await getConverter().toEnml(parsed.body), resources: [] };
+    const content = prepared.content;
+    const localResources = mergeNoteResources([], attachments.resources(doc).concat(prepared.resources), content);
+
     const note = existing
-      ? await updateNote(client, existing, meta, content, notebookGuid, attachments.resources(doc))
+      ? await updateNote(client, existing, meta, content, notebookGuid, localResources)
       : await client.createNote({
         title,
         notebookGuid,
         content,
         tagNames: meta.tags,
-        resources: attachments.resources(doc)
+        resources: localResources
       });
 
     meta.guid = note.guid;
@@ -228,7 +243,8 @@ async function resolveNoteTitle(
  *   - passing `resources` *replaces* the whole set, so when there is a new
  *     local attachment the server's own resources have to be carried along or
  *     they would be silently dropped;
- *   - passing `resources: []` wipes them, so an empty array is never sent.
+ *   - passing `resources: []` wipes them; this is used only when removing the
+ *     last automatically generated diagram, after preserving manual resources.
  */
 async function updateNote(
   client: EvernoteClient,
@@ -238,15 +254,8 @@ async function updateNote(
   notebookGuid: string,
   localResources: any[]
 ): Promise<EvernoteNote> {
-  let resources: any[] | undefined;
-  if (localResources.length === 0) {
-    resources = undefined;
-  } else if (existing.resources && existing.resources.length > 0) {
-    const full = await client.getNoteResources(existing.guid);
-    resources = localResources.concat(full.resources || []);
-  } else {
-    resources = localResources;
-  }
+  const resources = await resourcesForUpdate(existing, localResources, content,
+    () => client.getNoteResources(existing.guid));
   return client.updateNote({
     guid: existing.guid,
     title: meta.title,

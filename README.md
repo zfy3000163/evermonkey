@@ -56,7 +56,24 @@ If a file has no `title`, the file name is used. Buffers with no file on disk
 so publishing them again only updates the same note until you close the window.
 
 Attachments are uploaded by `Ever attach` and travel with the note on the next
-publish. Publishing does not upload new local files on its own.
+publish. Mermaid fenced code blocks are also automatically rendered to PNG and
+embedded as inline image resources on `Ever publish`:
+
+````markdown
+```mermaid
+flowchart TD
+    A[Dispatch] --> B[Send tokens]
+```
+````
+
+Rendering uses the bundled Mermaid 10.9.1 and an isolated headless Edge or Chrome
+process, without a CDN or browser download. Install Edge or Chrome if unavailable;
+`evermonkey.mermaid.browserPath` can specify its executable. Rendering is enabled
+by default (`evermonkey.mermaid.enabled`). The Markdown source remains editable
+and is preserved when reopening the note. Unchanged diagrams reuse a local PNG
+cache; obsolete generated resources are removed on publish while manual
+attachments are retained. Syntax errors stop publication and identify the block's
+line in the Markdown body. This runs on `Ever publish`, not on ordinary file save.
 
 ## Example
 ![editnote](assets/editnote.gif)
